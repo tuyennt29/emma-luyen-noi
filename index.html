@@ -49,6 +49,8 @@ button{cursor:pointer}
 .sub{margin:0;color:var(--muted);text-align:center;max-width:52ch;min-height:1.5em}
 .sub b{color:var(--ink)}
 .main{width:100%;max-width:420px;border:0;border-radius:18px;padding:18px 20px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:1.2rem}
+.alt{width:100%;max-width:420px;border:2px solid var(--accent);border-radius:18px;padding:14px 18px;background:transparent;color:var(--ink);font-weight:600;font-size:1rem}
+.alt:disabled{opacity:.4;cursor:default}
 .main.stop{background:transparent;color:var(--ink);border:2px solid var(--line)}
 .ctrls{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:100%;max-width:420px}
 .ctrls button{background:transparent;border:1px solid var(--line);border-radius:14px;padding:12px 6px;font-weight:600}
@@ -128,6 +130,7 @@ button{cursor:pointer}
     <p class="caption" id="caption">Mỗi ngày một đoạn ngắn về chính anh.</p>
     <p class="sub" id="sub">Bấm một lần, sau đó mọi thứ chạy bằng giọng nói.</p>
     <button class="main" id="mainBtn">Bắt đầu bài hôm nay</button>
+    <button class="alt" id="topicBtn">Tự chọn chủ đề: nói yêu cầu, Emma soạn bài ngay</button>
     <div class="ctrls">
       <button id="cRepeat" disabled>Lặp lại</button>
       <button id="cSlow">Chậm hơn</button>
@@ -139,7 +142,7 @@ button{cursor:pointer}
       <button type="submit">Gửi</button>
     </form>
     <div class="banner" id="banner" hidden></div>
-    <p class="hint">Khẩu lệnh bằng giọng nói lúc nghe tiếng bíp: <b>repeat</b> · <b>next</b> · <b>slower</b> · <b>stop</b> (hoặc “lặp lại”, “tiếp”, “chậm”, “dừng”).</p>
+    <p class="hint">Muốn luyện chủ đề riêng, ví dụ “họp với khách hàng Nhật” hay “đi cắm trại cuối tuần”, bấm nút Tự chọn chủ đề rồi nói. Khẩu lệnh bằng giọng nói lúc nghe tiếng bíp: <b>repeat</b> · <b>next</b> · <b>slower</b> · <b>stop</b> (hoặc “lặp lại”, “tiếp”, “chậm”, “dừng”).</p>
   </section>
 
   <section class="sheet" id="sheet">
@@ -261,7 +264,7 @@ function errText(e){
   return'Không kết nối được AI. Anh kiểm tra mạng rồi thử lại.';
 }
 
-function lessonPrompt(){
+function lessonPrompt(topic){
   const d=new Date(), doy=Math.floor((d-new Date(d.getFullYear(),0,0))/864e5);
   const theme=THEMES[doy%THEMES.length];
   const hist=LS.get('history',[]);
@@ -272,7 +275,7 @@ function lessonPrompt(){
 About the learner (write in HIS voice, first person "I"):
 ${LS.get('profile',DEFAULT_PROFILE)}
 
-Today is ${d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}. Today's theme: "${theme}".
+Today is ${d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}. ${topic?`He just asked out loud for this topic (speech-recognition transcript, possibly in Vietnamese or mixed; interpret what he means and follow it closely): "${topic}". Write title_vi and intro_vi about exactly that topic. If the topic is not about his own life, still write it in first person as his own experience or opinion.`:`Today's theme: "${theme}".`}
 ${recent.length?'Recent lesson titles (do not repeat these angles): '+recent.join('; ')+'.':''}
 ${weak.length?'Phrases he found hard recently (reuse one or two naturally): '+weak.join('; ')+'.':''}
 
@@ -287,7 +290,15 @@ Rules:
 Return JSON exactly in this shape:
 {"title_vi":"...","title_en":"...","intro_vi":"...","sentences":["..."],"keywords":[{"en":"...","vi":"..."}],"questions":["..."]}`;
 }
-async function getLesson(force){
+async function getLesson(force,topic){
+  if(topic){
+    const C=await askJSON(lessonPrompt(topic),'default');
+    if(!C||!Array.isArray(C.sentences)||C.sentences.length<3) throw{code:'invalid_json'};
+    C.sentences=C.sentences.map(String).slice(0,9);
+    C.questions=(Array.isArray(C.questions)?C.questions:[]).map(String).slice(0,3);
+    C.keywords=Array.isArray(C.keywords)?C.keywords.slice(0,6):[];
+    C.date=today(); C.custom=topic; LS.set('customLesson',C); return C;
+  }
   const cached=LS.get('lesson',null);
   if(!force&&cached&&cached.date===today()) return cached;
   if(aiMode()==='none') return Object.assign({},SAMPLE,{date:today()});
@@ -367,7 +378,7 @@ function listen(opts){
     beep();
     setTimeout(()=>{
       if(ended||tok!==S.token)return finish(null);
-      rec=new SR(); rec.lang='en-US'; rec.interimResults=true; rec.maxAlternatives=3; rec.continuous=long;
+      rec=new SR(); rec.lang=opts.lang||'en-US'; rec.interimResults=true; rec.maxAlternatives=3; rec.continuous=long;
       rec.onresult=e=>{
         let interim='';
         for(let i=e.resultIndex;i<e.results.length;i++){
@@ -434,7 +445,7 @@ function phase(i){[...$('#phases').children].forEach((li,k)=>{li.className=k===i
 function hl(i,score){S.idx=i;[...$('#sents').children].forEach((li,k)=>li.classList.toggle('cur',k===i));if(score!=null&&$('#sents').children[i]){const li=$('#sents').children[i];let sc=li.querySelector('.sc');if(!sc){sc=document.createElement('span');sc.className='sc';li.appendChild(sc)}sc.textContent=score+' điểm'}}
 function renderLesson(){
   const L=S.lesson||SAMPLE;
-  $('#lessonMeta').innerHTML=L.sample?'<span class="tag">Bài mẫu</span>':'Bài ngày '+(L.date||'').split('-').reverse().join('/');
+  $('#lessonMeta').innerHTML=L.sample?'<span class="tag">Bài mẫu</span>':(L.custom?'<span class="tag">Chủ đề tự chọn</span> '+esc(L.custom):'Bài ngày '+(L.date||'').split('-').reverse().join('/'));
   $('#lessonTitle').textContent=(L.title_vi||'')+(L.title_en?' · '+L.title_en:'');
   $('#sents').innerHTML=L.sentences.map(s=>'<li>'+esc(s)+'</li>').join('');
   $('#kw').innerHTML=(L.keywords||[]).map(k=>'<span>'+esc(k.en)+' <i>· '+esc(k.vi)+'</i></span>').join('');
@@ -448,7 +459,7 @@ function updateBtn(){
   const b=$('#mainBtn');
   b.textContent=S.running?'Dừng buổi luyện':'Bắt đầu bài hôm nay';
   b.classList.toggle('stop',S.running);
-  $('#cRepeat').disabled=!S.running;$('#cNext').disabled=!S.running;
+  $('#cRepeat').disabled=!S.running;$('#cNext').disabled=!S.running;$('#topicBtn').disabled=S.running;
 }
 function streak(){
   const days=new Set(LS.get('history',[]).map(h=>h.date));let n=0;const d=new Date();
@@ -481,11 +492,28 @@ async function shadow(sent,i){
     else await say('Em đọc chậm lại, anh nghe kỹ nhé.','vi');
   }
 }
-async function runLesson(){
+async function runLesson(mode){
   const tok=++S.token; S.running=true; S.skip=false; updateBtn(); wake(true);
   $('#banner').hidden=true;
   try{
-    if(!S.lesson||S.lesson.date!==today()||S.lesson.sample&&aiMode()!=='none'){
+    if(mode==='custom'){
+      phase(-1);
+      if(aiMode()==='none'){await say('Phần tự chọn chủ đề cần có API key. Anh vào Cài đặt dán key Gemini rồi thử lại nhé.','vi');return}
+      $('#caption').textContent='Anh muốn luyện chủ đề gì?';
+      await say('Anh muốn luyện chủ đề gì? Anh nói sau tiếng bíp, tiếng Việt hay tiếng Anh đều được.','vi');
+      const ask={lang:'vi-VN',long:true,silence:2200,maxMs:30000};
+      let h=await listen(ask); alive(tok);
+      if(!h||!h.text.trim()){await say('Em chưa nghe rõ. Anh nói lại chủ đề nhé.','vi');h=await listen(ask);alive(tok)}
+      if(!h||!h.text.trim()){await say('Em chưa nghe được chủ đề. Khi nào sẵn sàng anh bấm lại nút nhé.','vi');return}
+      const topic=h.text.trim();
+      if(cmd(topic)==='stop')handleCmd('stop');
+      $('#caption').textContent='Chủ đề: '+topic;
+      setState('think','Emma đang soạn bài');
+      await say('Em soạn bài về: '+topic+'. Anh đợi em một chút nhé.','vi');
+      try{S.lesson=await getLesson(true,topic)}catch(e){if(e==='cancel')throw e;await say(errText(e),'vi');return}
+      alive(tok); renderLesson();
+    }
+    else if(!S.lesson||S.lesson.custom||S.lesson.date!==today()||S.lesson.sample&&aiMode()!=='none'){
       setState('think','Emma đang soạn bài');
       $('#caption').textContent='Đang soạn bài hôm nay...';
       await say('Chào anh. Em đang soạn bài hôm nay, anh đợi em một chút nhé.','vi');
@@ -602,6 +630,8 @@ function stopAll(spoken){
 /* ---------- Wiring ---------- */
 $('#mainBtn').onclick=()=>{try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume&&actx.resume()}catch(e){}
   if(S.running)stopAll(false);else runLesson()};
+$('#topicBtn').onclick=()=>{try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume&&actx.resume()}catch(e){}
+  if(!S.running)runLesson('custom')};
 $('#cRepeat').onclick=()=>{ // replay current sentence by abandoning this listen with a repeat command
   if(typeResolver)typeResolver('repeat');
 };

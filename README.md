@@ -9,6 +9,8 @@ Mỗi ngày Emma soạn một đoạn 6–8 câu ngắn về chính bạn (trìn
 3. **Kể lại**: kể lại cả đoạn. Claude nhận xét tối đa 3 lỗi và đưa câu sửa mẫu.
 4. **Hỏi đáp**: trả lời 3 câu hỏi, sau đó nói theo câu trả lời hay hơn.
 
+**Tự chọn chủ đề:** bấm nút *Tự chọn chủ đề*, nói yêu cầu bằng tiếng Việt hoặc tiếng Anh (ví dụ "họp với khách hàng Nhật"). Emma soạn bài ngay và chạy đủ 4 bước như trên.
+
 Khẩu lệnh: `repeat` · `next` · `slower` · `stop` (hoặc "lặp lại", "tiếp", "chậm", "dừng").
 
 ## Cách dùng
