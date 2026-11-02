@@ -205,34 +205,45 @@ async function askJSON(prompt,tier){
   const d=await r.json();
   return parseJSON((d.content||[]).map(c=>c.text||'').join(''));
 }
-let gemModel=null;
-async function geminiModel(key){
-  if(gemModel)return gemModel;
-  const saved=LS.get('gemModel',null);
-  if(saved&&saved.day===today()){gemModel=saved.name;return gemModel}
+let gemList=null;
+const GEM_PREF=['gemini-3.5-flash','gemini-3.6-flash','gemini-3.7-flash','gemini-3.8-flash','gemini-flash-latest','gemini-3.5-flash-lite','gemini-flash-lite-latest'];
+async function geminiCandidates(key){
+  if(gemList)return gemList;
+  let avail=[];
   try{
     const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',{headers:{'x-goog-api-key':key}});
-    if(r.status===400||r.status===403)throw{code:'api_401'};
+    if(r.status===400||r.status===401||r.status===403)throw{code:'api_401'};
     const d=await r.json();
-    const names=(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
-      .filter(n=>/flash/.test(n)&&!/lite|image|tts|audio|live|thinking|8b|exp|preview|embed/.test(n));
-    const ver=n=>{const m=n.match(/gemini-(\d+(?:\.\d+)?)/);return m?parseFloat(m[1]):0};
-    names.sort((a,b)=>ver(b)-ver(a)||(/latest/.test(b)?1:0)-(/latest/.test(a)?1:0)||a.length-b.length);
-    gemModel=names[0]||'gemini-flash-latest';
-  }catch(e){if(e&&e.code)throw e;gemModel='gemini-flash-latest'}
-  LS.set('gemModel',{day:today(),name:gemModel});
-  return gemModel;
+    avail=(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
+      .filter(n=>/flash/.test(n)&&!/image|tts|audio|live|omni|thinking|8b|exp|preview|embed/.test(n));
+  }catch(e){if(e&&e.code)throw e}
+  const good=LS.get('gemGood','');
+  const list=[good,...GEM_PREF.filter(n=>!avail.length||avail.includes(n)),...avail].filter(Boolean);
+  gemList=[...new Set(list)];
+  return gemList;
+}
+async function gemCall(model,prompt,key,ms){
+  const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),ms);
+  try{
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent',{method:'POST',signal:ctl.signal,
+      headers:{'content-type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt+'\n\nReply with only the JSON value, no other text.'}]}],
+        generationConfig:{responseMimeType:'application/json',temperature:0.9}})});
+    if(r.status===400||r.status===401||r.status===403){const b=await r.text();if(/api key|API_KEY|permission/i.test(b))throw{code:'api_401',fatal:true};throw{code:'api_'+r.status}}
+    if(!r.ok)throw{code:'api_'+r.status};
+    const d=await r.json();
+    return parseJSON(((d.candidates||[])[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join(''));
+  }catch(e){if(e&&e.name==='AbortError')throw{code:'timeout'};throw e}
+  finally{clearTimeout(t)}
 }
 async function askGemini(prompt,key){
-  const model=await geminiModel(key);
-  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent',{method:'POST',
-    headers:{'content-type':'application/json','x-goog-api-key':key},
-    body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt+'\n\nReply with only the JSON value, no other text.'}]}],
-      generationConfig:{responseMimeType:'application/json',temperature:0.9}})});
-  if(!r.ok){if(r.status===404){gemModel=null;LS.set('gemModel',null)}throw{code:(r.status===400||r.status===403)?'api_401':'api_'+r.status}}
-  const d=await r.json();
-  const txt=((d.candidates||[])[0]?.content?.parts||[]).map(p=>p.text||'').join('');
-  return parseJSON(txt);
+  const list=await geminiCandidates(key);
+  let last={code:'upstream'};
+  for(const m of list.slice(0,4)){
+    try{const out=await gemCall(m,prompt,key,m===LS.get('gemGood','')?40000:25000);LS.set('gemGood',m);return out}
+    catch(e){last=e;if(e.fatal)throw e;if(m===LS.get('gemGood',''))LS.set('gemGood','')}
+  }
+  throw last;
 }
 function errText(e){
   const c=e&&e.code||'';
@@ -242,6 +253,7 @@ function errText(e){
   if(c==='api_401')return'API key không đúng. Anh kiểm tra lại trong Cài đặt.';
   if(c==='api_429')return provider()==='gemini'?'Đã chạm giới hạn miễn phí của Gemini, anh thử lại sau ít phút.':'Máy chủ AI đang bận, anh thử lại sau.';
   if(c==='api_529'||c==='api_503')return'Máy chủ AI đang bận, anh thử lại sau.';
+  if(c==='timeout')return'Gemini đang quá tải, anh thử lại sau ít phút.';
   if(c==='invalid_json')return'AI trả lời sai định dạng, anh thử lại.';
   return'Không kết nối được AI. Anh kiểm tra mạng rồi thử lại.';
 }
@@ -590,7 +602,7 @@ $('#typeForm').onsubmit=e=>{e.preventDefault();const v=$('#typeIn').value.trim()
 $('#setBtn').onclick=()=>{const p=$('#panel');p.hidden=!p.hidden;$('#setBtn').setAttribute('aria-expanded',String(!p.hidden))};
 $('#rate').oninput=e=>{S.rate=+e.target.value;$('#rateVal').textContent=S.rate};
 $('#saveSet').onclick=()=>{
-  LS.set('key',$('#apiKey').value.trim());gemModel=null;LS.set('gemModel',null);LS.set('rate',S.rate);LS.set('voice',$('#voice').value);
+  LS.set('key',$('#apiKey').value.trim());gemList=null;LS.set('gemGood','');LS.set('rate',S.rate);LS.set('voice',$('#voice').value);
   LS.set('profile',$('#profile').value.trim()||DEFAULT_PROFILE);aiStatus();
   $('#saveSet').textContent='Đã lưu';setTimeout(()=>$('#saveSet').textContent='Lưu',1500);
 };
