@@ -13,11 +13,14 @@ Khẩu lệnh: `repeat` · `next` · `slower` · `stop` (hoặc "lặp lại", "
 
 ## Cách dùng
 - Mở bằng Chrome (Android, máy tính) hoặc Safari (iPhone), rồi cho phép dùng micro.
-- Vào **Cài đặt**, nhập Claude API key (lấy tại console.anthropic.com). Key chỉ lưu trên thiết bị của bạn.
+- Vào **Cài đặt**, dán API key:
+  - **Gemini (miễn phí):** lấy tại aistudio.google.com, mục *Get API key* (key bắt đầu bằng `AIza`).
+  - **Claude:** lấy tại console.anthropic.com (key bắt đầu bằng `sk-ant-`).
+  - App tự nhận loại key. Key chỉ lưu trên thiết bị của bạn.
 - Thêm vào màn hình chính để mở như một ứng dụng.
 
 ## Công nghệ
-Chỉ gồm một file HTML tĩnh, không cần máy chủ. Nhận giọng nói và đọc dùng Web Speech API. Soạn bài dùng `claude-sonnet-5-5`, chấm bài dùng `claude-haiku-5-5`, gọi thẳng từ trình duyệt. Lịch sử luyện tập lưu trong localStorage.
+Chỉ gồm một file HTML tĩnh, không cần máy chủ. Nhận giọng nói và đọc dùng Web Speech API. AI: Gemini Flash (tự chọn bản mới nhất) hoặc Claude (`claude-sonnet-5-5` soạn bài, `claude-haiku-5-5` chấm bài), gọi thẳng từ trình duyệt. Lịch sử luyện tập lưu trong localStorage.
 
 ## Triển khai
 Dùng GitHub Pages: Settings → Pages → Deploy from branch → `main` / root.

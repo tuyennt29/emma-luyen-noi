@@ -96,8 +96,8 @@ button{cursor:pointer}
   <section class="panel" id="panel" hidden>
     <p class="eyebrow">Cài đặt</p>
     <p class="note" id="aiStatus">Đang kiểm tra kết nối AI...</p>
-    <label id="keyWrap">Claude API key (chỉ cần khi mở ngoài claude.ai)
-      <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off">
+    <label id="keyWrap">API key: Gemini (miễn phí, bắt đầu bằng AIza...) hoặc Claude (sk-ant-...)
+      <input type="password" id="apiKey" placeholder="Dán key Gemini hoặc Claude" autocomplete="off">
     </label>
     <label>Tốc độ đọc tiếng Anh: <span id="rateVal">0.9</span>
       <input type="range" id="rate" min="0.6" max="1.2" step="0.05" value="0.9">
@@ -182,12 +182,13 @@ let sampleFn=null, aiChecked=false;
 if(window.claude&&window.claude.use){
   window.claude.use('sample').then(f=>{sampleFn=f;aiChecked=true;aiStatus()}).catch(()=>{aiChecked=true;aiStatus()});
 }else{aiChecked=true}
+function provider(){const k=LS.get('key','');return /^sk-ant-/.test(k)?'claude':(k?'gemini':'')}
 function aiMode(){if(sampleFn)return'sample';if(LS.get('key',''))return'key';return'none'}
 function aiStatus(){
   const m=aiMode(), el=$('#aiStatus');
   el.textContent= m==='sample'?'AI: dùng Claude trong tài khoản claude.ai của anh. Không cần API key.'
-    : m==='key'?'AI: dùng Claude API key đã lưu trên máy này.'
-    : (aiChecked?'Chưa có AI. Nhập Claude API key để Emma soạn bài mới mỗi ngày và chấm phần kể lại, hỏi đáp. Không có AI vẫn luyện được bài mẫu.':'Đang kiểm tra kết nối AI...');
+    : m==='key'?(provider()==='claude'?'AI: dùng Claude API key đã lưu trên máy này.':'AI: dùng Gemini API key (miễn phí) đã lưu trên máy này.')
+    : (aiChecked?'Chưa có AI. Nhập API key Gemini (miễn phí) hoặc Claude để Emma soạn bài mới mỗi ngày và chấm phần kể lại, hỏi đáp. Không có AI vẫn luyện được bài mẫu.':'Đang kiểm tra kết nối AI...');
   $('#keyWrap').hidden= m==='sample';
 }
 function parseJSON(t){try{return JSON.parse(t)}catch(e){}const m=String(t).match(/[\{\[][\s\S]*[\}\]]/);if(m){try{return JSON.parse(m[0])}catch(e){}}throw{code:'invalid_json'}}
@@ -195,6 +196,7 @@ async function askJSON(prompt,tier){
   if(sampleFn) return await sampleFn.json(prompt,{modelTier:tier,cache:false});
   const key=LS.get('key','');
   if(!key) throw{code:'no_ai'};
+  if(provider()==='gemini') return await askGemini(prompt,key);
   const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
     headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body:JSON.stringify({model:tier==='quick'?'claude-haiku-5-5':'claude-sonnet-5-5',max_tokens:1800,
@@ -203,13 +205,43 @@ async function askJSON(prompt,tier){
   const d=await r.json();
   return parseJSON((d.content||[]).map(c=>c.text||'').join(''));
 }
+let gemModel=null;
+async function geminiModel(key){
+  if(gemModel)return gemModel;
+  const saved=LS.get('gemModel',null);
+  if(saved&&saved.day===today()){gemModel=saved.name;return gemModel}
+  try{
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',{headers:{'x-goog-api-key':key}});
+    if(r.status===400||r.status===403)throw{code:'api_401'};
+    const d=await r.json();
+    const names=(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
+      .filter(n=>/flash/.test(n)&&!/lite|image|tts|audio|live|thinking|8b|exp|preview|embed/.test(n));
+    const ver=n=>{const m=n.match(/gemini-(\d+(?:\.\d+)?)/);return m?parseFloat(m[1]):0};
+    names.sort((a,b)=>ver(b)-ver(a)||(/latest/.test(b)?1:0)-(/latest/.test(a)?1:0)||a.length-b.length);
+    gemModel=names[0]||'gemini-flash-latest';
+  }catch(e){if(e&&e.code)throw e;gemModel='gemini-flash-latest'}
+  LS.set('gemModel',{day:today(),name:gemModel});
+  return gemModel;
+}
+async function askGemini(prompt,key){
+  const model=await geminiModel(key);
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent',{method:'POST',
+    headers:{'content-type':'application/json','x-goog-api-key':key},
+    body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt+'\n\nReply with only the JSON value, no other text.'}]}],
+      generationConfig:{responseMimeType:'application/json',temperature:0.9}})});
+  if(!r.ok){if(r.status===404){gemModel=null;LS.set('gemModel',null)}throw{code:(r.status===400||r.status===403)?'api_401':'api_'+r.status}}
+  const d=await r.json();
+  const txt=((d.candidates||[])[0]?.content?.parts||[]).map(p=>p.text||'').join('');
+  return parseJSON(txt);
+}
 function errText(e){
   const c=e&&e.code||'';
   if(c==='no_ai')return'Chưa có AI, em dùng bài mẫu.';
   if(c==='not_granted'||c==='sampling_disabled')return'Claude chưa được cho phép dùng ở trang này.';
   if(c==='rate_limited')return'Đang gọi AI quá nhiều, anh thử lại sau ít phút.';
   if(c==='api_401')return'API key không đúng. Anh kiểm tra lại trong Cài đặt.';
-  if(c==='api_429'||c==='api_529')return'Máy chủ AI đang bận, anh thử lại sau.';
+  if(c==='api_429')return provider()==='gemini'?'Đã chạm giới hạn miễn phí của Gemini, anh thử lại sau ít phút.':'Máy chủ AI đang bận, anh thử lại sau.';
+  if(c==='api_529'||c==='api_503')return'Máy chủ AI đang bận, anh thử lại sau.';
   if(c==='invalid_json')return'AI trả lời sai định dạng, anh thử lại.';
   return'Không kết nối được AI. Anh kiểm tra mạng rồi thử lại.';
 }
@@ -558,7 +590,7 @@ $('#typeForm').onsubmit=e=>{e.preventDefault();const v=$('#typeIn').value.trim()
 $('#setBtn').onclick=()=>{const p=$('#panel');p.hidden=!p.hidden;$('#setBtn').setAttribute('aria-expanded',String(!p.hidden))};
 $('#rate').oninput=e=>{S.rate=+e.target.value;$('#rateVal').textContent=S.rate};
 $('#saveSet').onclick=()=>{
-  LS.set('key',$('#apiKey').value.trim());LS.set('rate',S.rate);LS.set('voice',$('#voice').value);
+  LS.set('key',$('#apiKey').value.trim());gemModel=null;LS.set('gemModel',null);LS.set('rate',S.rate);LS.set('voice',$('#voice').value);
   LS.set('profile',$('#profile').value.trim()||DEFAULT_PROFILE);aiStatus();
   $('#saveSet').textContent='Đã lưu';setTimeout(()=>$('#saveSet').textContent='Lưu',1500);
 };
