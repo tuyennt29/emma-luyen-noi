@@ -103,7 +103,10 @@ button{cursor:pointer}
       <input type="range" id="rate" min="0.6" max="1.2" step="0.05" value="0.9">
     </label>
     <label>Giọng tiếng Anh
-      <select id="voice"><option value="">Tự chọn</option></select>
+      <select id="voice"><option value="">Tự chọn giọng nữ</option></select>
+    </label>
+    <label>Giọng tiếng Việt (hướng dẫn, nhận xét)
+      <select id="viVoice"><option value="">Tự chọn giọng nữ</option></select>
     </label>
     <p class="note" id="viVoiceNote"></p>
     <label>Hồ sơ của anh (Emma dùng để viết bài)
@@ -302,16 +305,22 @@ let voices=[];
 function loadVoices(){
   if(!synth)return; voices=synth.getVoices();
   const sel=$('#voice'), cur=LS.get('voice','');
-  sel.innerHTML='<option value="">Tự chọn</option>'+voices.filter(v=>/^en/i.test(v.lang)).map(v=>`<option value="${v.name.replace(/"/g,'&quot;')}">${v.name} (${v.lang})</option>`).join('');
+  const opt=v=>`<option value="${v.name.replace(/"/g,'&quot;')}">${v.name} (${v.lang})${isMale(v)?'':(isFemale(v)?' · nữ':'')}</option>`;
+  sel.innerHTML='<option value="">Tự chọn giọng nữ</option>'+voices.filter(v=>/^en/i.test(v.lang)&&!isMale(v)).map(opt).join('');
   sel.value=cur;
-  $('#viVoiceNote').textContent=voices.some(v=>/^vi/i.test(v.lang))?'':'Máy này chưa có giọng đọc tiếng Việt, lời nhận xét có thể đọc sai dấu. Trên Android: Cài đặt › Chuyển văn bản thành giọng nói › tải tiếng Việt.';
+  const vs=$('#viVoice'), vcur=LS.get('viVoice','');
+  vs.innerHTML='<option value="">Tự chọn giọng nữ</option>'+voices.filter(v=>/^vi/i.test(v.lang)&&!isMale(v)).map(opt).join('');
+  vs.value=vcur;
+  $('#viVoiceNote').textContent=voices.some(v=>/^vi/i.test(v.lang)&&!isMale(v))?'':'Trình duyệt này chưa có giọng nữ tiếng Việt nên phần nhận xét có thể đọc sai dấu. Trên điện thoại Android: Cài đặt › Quản lý chung › Chuyển văn bản thành giọng nói › chọn Google, tải gói Tiếng Việt và chọn giọng nữ. Trên iPhone: Cài đặt › Trợ năng › Nội dung được đọc › Giọng nói › Tiếng Việt › Linh.';
 }
 if(synth){loadVoices(); synth.onvoiceschanged=loadVoices;}
+function isMale(v){return /\b(male|nam|david|mark|guy|daniel|alex|fred|andrew|brian|christopher|eric|roger|steffan|tom|james|george|ryan|aaron|arthur|oliver|rishi|an|namminh|minh|thomas|liam|davis|tony|jason|ralph|reed|rocko|grandpa|eddy)\b/i.test(v.name)&&!/female/i.test(v.name)}
+function isFemale(v){return /female|nữ|hoaimy|hoai ?my|linh|samantha|aria|jenny|ava|emma|michelle|zira|karen|moira|tessa|serena|susan|hazel|libby|sonia|natasha|allison|victoria|joanna|salli|kendra|kimberly|ivy|google us english|google uk english female|nicky|zoe|flo|sandy|shelley/i.test(v.name)}
+function bestFemale(list){return list.find(v=>isFemale(v)&&/natural|online|neural|premium|enhanced/i.test(v.name))||list.find(isFemale)||list.find(v=>!isMale(v))||list[0]}
 function pickVoice(lang){
-  if(lang==='vi') return voices.find(v=>/^vi/i.test(v.lang));
+  if(lang==='vi'){const c=voices.find(v=>v.name===LS.get('viVoice',''));if(c)return c;return bestFemale(voices.filter(v=>/^vi/i.test(v.lang)))}
   const chosen=LS.get('voice',''); const c=voices.find(v=>v.name===chosen); if(c)return c;
-  const en=voices.filter(v=>/^en[-_]US/i.test(v.lang));
-  return en.find(v=>/google us english|samantha|aria|jenny|ava|female/i.test(v.name))||en[0]||voices.find(v=>/^en/i.test(v.lang));
+  return bestFemale(voices.filter(v=>/^en[-_]US/i.test(v.lang)))||bestFemale(voices.filter(v=>/^en/i.test(v.lang)));
 }
 function chunks(t){const m=String(t).match(/[^.!?]+[.!?]*\s*/g);return(m||[String(t)]).map(s=>s.trim()).filter(Boolean)}
 function speakOne(text,lang,rate){
@@ -319,7 +328,7 @@ function speakOne(text,lang,rate){
     if(!synth)return res();
     const u=new SpeechSynthesisUtterance(text), v=pickVoice(lang);
     if(v){u.voice=v;u.lang=v.lang}else u.lang=lang==='vi'?'vi-VN':'en-US';
-    u.rate=rate; let done=false;
+    u.rate=rate; u.pitch=1.08; let done=false;
     const fin=()=>{if(done)return;done=true;clearTimeout(t);res()};
     u.onend=fin;u.onerror=fin;
     const t=setTimeout(fin,3000+text.length*120/rate);
@@ -331,7 +340,7 @@ async function say(text,lang,mul){
   const tok=S.token; lang=lang||'en';
   setState('speak');
   if(lang==='en') $('#caption').textContent=text; else $('#sub').textContent=text;
-  const rate=lang==='vi'?1.05:S.rate*(mul||1);
+  const rate=lang==='vi'?0.95:S.rate*(mul||1);
   for(const c of chunks(text)){alive(tok);if(S.skip)break;await speakOne(c,lang,rate)}
   alive(tok);
 }
@@ -602,11 +611,11 @@ $('#typeForm').onsubmit=e=>{e.preventDefault();const v=$('#typeIn').value.trim()
 $('#setBtn').onclick=()=>{const p=$('#panel');p.hidden=!p.hidden;$('#setBtn').setAttribute('aria-expanded',String(!p.hidden))};
 $('#rate').oninput=e=>{S.rate=+e.target.value;$('#rateVal').textContent=S.rate};
 $('#saveSet').onclick=()=>{
-  LS.set('key',$('#apiKey').value.trim());gemList=null;LS.set('gemGood','');LS.set('rate',S.rate);LS.set('voice',$('#voice').value);
+  LS.set('key',$('#apiKey').value.trim());gemList=null;LS.set('gemGood','');LS.set('rate',S.rate);LS.set('voice',$('#voice').value);LS.set('viVoice',$('#viVoice').value);
   LS.set('profile',$('#profile').value.trim()||DEFAULT_PROFILE);aiStatus();
   $('#saveSet').textContent='Đã lưu';setTimeout(()=>$('#saveSet').textContent='Lưu',1500);
 };
-$('#testVoice').onclick=async()=>{LS.set('voice',$('#voice').value);await speakOne('Hello, I am Emma. Let us practice together.','en',S.rate);await speakOne('Chào anh, em là Emma.','vi',1.05)};
+$('#testVoice').onclick=async()=>{LS.set('voice',$('#voice').value);LS.set('viVoice',$('#viVoice').value);await speakOne('Chào anh, em là Emma. Hôm nay mình cùng luyện nói nhé.','vi',0.95);await speakOne('Hello, I am Emma. Let us practice together.','en',S.rate)};
 $('#newLesson').onclick=async()=>{
   if(S.running)stopAll(false);
   const b=$('#newLesson');b.disabled=true;b.textContent='Đang soạn...';
