@@ -18,6 +18,7 @@ Khẩu lệnh: `repeat` · `next` · `slower` · `stop` (hoặc "lặp lại", "
 - Vào **Cài đặt**, dán API key:
   - **Gemini (miễn phí):** lấy tại aistudio.google.com, mục *Get API key* (key bắt đầu bằng `AIza`).
   - **Claude:** lấy tại console.anthropic.com (key bắt đầu bằng `sk-ant-`).
+  - **Giọng đọc AI cho mọi câu (khuyên dùng):** key Google Cloud Text-to-Speech. Bật API *Cloud Text-to-Speech*, gắn thanh toán (miễn phí 1 triệu ký tự/tháng với giọng Chirp 3 HD), tạo API key giới hạn cho `https://tuyennt29.github.io/*`. Dán vào ô *Key giọng đọc Google Cloud*.
   - App tự nhận loại key. Key chỉ lưu trên thiết bị của bạn.
 - Thêm vào màn hình chính để mở như một ứng dụng.
 
