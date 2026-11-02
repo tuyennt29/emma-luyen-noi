@@ -355,8 +355,10 @@ function speakOne(text,lang,rate){
 
 /* ---------- AI voice (Gemini TTS) ---------- */
 const VI_FIXED=[...["Anh muốn luyện chủ đề gì? Anh nói sau tiếng bíp, tiếng Việt hay tiếng Anh đều được.", "Anh nghe em đọc cả đoạn nhé.", "Anh nói theo em câu này nhé.", "Chào anh. Em đang soạn bài hôm nay, anh đợi em một chút nhé.", "Em chưa nghe rõ. Anh nói lại chủ đề nhé.", "Em chưa nghe thấy anh nói. Mình sang phần sau nhé.", "Em chưa nghe thấy. Mình thử lại nhé.", "Em chưa nghe được chủ đề. Khi nào sẵn sàng anh bấm lại nút nhé.", "Em đọc chậm lại, anh nghe kỹ nhé.", "Gần đúng rồi. Anh chú ý mấy từ này:", "Không sao, câu tiếp nhé.", "Không sao, mình sang câu tiếp nhé.", "Nói lại nhé.", "Nói repeat để nghe lại, hoặc next để bắt đầu nói theo.", "Phần ba. Anh kể lại cả đoạn theo cách của anh, không cần đúng từng chữ. Nghe tiếng bíp rồi bắt đầu, nói xong thì im lặng vài giây.", "Phần cuối. Em hỏi, anh trả lời tự nhiên một hai câu nhé.", "Phần hai. Em đọc từng câu, nghe tiếng bíp thì anh nói theo.", "Phần tự chọn chủ đề cần có API key. Anh vào Cài đặt dán key Gemini rồi thử lại nhé."],...PRAISE];
-let TTS_MODELS=['gemini-3.8-flash-tts','gemini-3.1-flash-tts-preview','gemini-2.5-flash-preview-tts'];
-function ttsOn(){return provider()==='gemini'&&LS.get('ttsMode','ai')==='ai'&&!S.ttsDown}
+let TTS_MODELS=['gemini-3.1-flash-tts-preview','gemini-2.5-flash-preview-tts','gemini-3.8-flash-tts'];
+const VI_TEST=['Chào anh, em là Emma. Hôm nay mình cùng luyện nói nhé.','Hello, I am Emma. Let us practice together.'];
+function ttsDownToday(){return LS.get('ttsDownDay','')===today()}
+function ttsOn(){return provider()==='gemini'&&LS.get('ttsMode','ai')==='ai'&&!ttsDownToday()}
 const player=new Audio(); player.preload='auto';
 const SILENT='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACABAAZGF0YQAAAAA=';
 function unlockAudio(){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume&&actx.resume()}catch(e){}try{player.src=SILENT;const p=player.play();p&&p.catch(()=>{})}catch(e){}}
@@ -364,46 +366,86 @@ let idbP=null;
 function idb(){if(!idbP)idbP=new Promise(res=>{try{const r=indexedDB.open('emma-tts',1);r.onupgradeneeded=()=>r.result.createObjectStore('a');r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)}catch(e){res(null)}});return idbP}
 async function idbGet(k){const db=await idb();if(!db)return null;return new Promise(res=>{try{const q=db.transaction('a').objectStore('a').get(k);q.onsuccess=()=>res(q.result||null);q.onerror=()=>res(null)}catch(e){res(null)}})}
 async function idbPut(k,v){const db=await idb();if(!db)return;try{db.transaction('a','readwrite').objectStore('a').put(v,k)}catch(e){}}
-const ttsMem=new Map(); let ttsActive=0; const ttsQ=[];
-function ttsSlot(key,urgent){return new Promise(r=>{if(ttsActive<2){ttsActive++;r()}else{const e={key,r};urgent?ttsQ.unshift(e):ttsQ.push(e)}})}
-function ttsPromote(key){const i=ttsQ.findIndex(e=>e.key===key);if(i>0){const [e]=ttsQ.splice(i,1);ttsQ.unshift(e)}}
-function ttsFree(){const n=ttsQ.shift();if(n)n.r();else ttsActive--}
+const vkey=t=>LS.get('aiVoice','Sulafat')+'|'+t;
+const ttsMem=new Map();
+async function cachedVoice(text){const k=vkey(text);if(ttsMem.has(k))return ttsMem.get(k);const b=await idbGet(k);if(b)ttsMem.set(k,b);return b}
 function b64Bytes(b64){const bin=atob(b64),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u}
-function pcmToWav(bytes,rate){const n=bytes.length,buf=new ArrayBuffer(44+n),v=new DataView(buf);const w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))};w(0,'RIFF');v.setUint32(4,36+n,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n,true);new Uint8Array(buf,44).set(bytes);return new Blob([buf],{type:'audio/wav'})}
-async function ttsFetch(text,voice){
+function decodePCM(bytes,mt){
+  let off=0,rate=24000;
+  if(bytes[0]===82&&bytes[1]===73&&bytes[2]===70&&bytes[3]===70){
+    rate=bytes[24]|(bytes[25]<<8)|(bytes[26]<<16);off=12;
+    while(off<bytes.length-8){const id=String.fromCharCode(bytes[off],bytes[off+1],bytes[off+2],bytes[off+3]);const sz=bytes[off+4]|(bytes[off+5]<<8)|(bytes[off+6]<<16)|(bytes[off+7]<<24);if(id==='data'){off+=8;break}off+=8+sz}
+  }else{const m=String(mt||'').match(/rate=(\d+)/);if(m)rate=+m[1]}
+  const len=(bytes.length-off)&~1;
+  return{pcm:new Int16Array(bytes.buffer.slice(bytes.byteOffset+off,bytes.byteOffset+off+len)),rate};
+}
+function wavBlob(pcm,rate){const n=pcm.length*2,buf=new ArrayBuffer(44+n),v=new DataView(buf);const w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))};w(0,'RIFF');v.setUint32(4,36+n,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n,true);new Int16Array(buf,44).set(pcm);return new Blob([buf],{type:'audio/wav'})}
+/* Split one long recording into N phrases at the pauses between them */
+function splitPCM(pcm,rate,texts){
+  const n=texts.length, fr=Math.round(rate*0.02), nf=Math.floor(pcm.length/fr);
+  if(nf<10)return null;
+  const e=new Float32Array(nf);
+  for(let f=0;f<nf;f++){let s=0;for(let i=f*fr;i<(f+1)*fr;i++)s+=pcm[i]*pcm[i];e[f]=Math.sqrt(s/fr)}
+  const srt=Array.from(e).sort((a,b)=>a-b), thr=Math.max(srt[Math.floor(nf*0.95)]*0.05,80);
+  let a=0;while(a<nf&&e[a]<thr)a++;let z=nf-1;while(z>a&&e[z]<thr)z--;
+  if(z-a<10)return null;
+  const runs=[];let st=-1;
+  for(let f=a;f<=z+1;f++){const sil=f<=z&&e[f]<thr;if(sil&&st<0)st=f;if(!sil&&st>=0){if(f-st>=12)runs.push({s:st,e:f,c:(st+f)/2,len:f-st});st=-1}}
+  if(runs.length<n-1)return null;
+  const total=z-a, lens=texts.map(t=>Math.max(4,t.length)), sum=lens.reduce((x,y)=>x+y,0);
+  const cuts=[];let cum=0,minC=a;
+  for(let i=0;i<n-1;i++){
+    cum+=lens[i];const T=a+total*cum/sum;
+    let best=null,bs=-1;
+    for(const r of runs){if(r.c<=minC)continue;const sc=r.len/(1+Math.abs(r.c-T)/100);if(sc>bs){bs=sc;best=r}}
+    if(!best)return null;cuts.push(best);minC=best.c;
+  }
+  const bounds=[a-3,...cuts.map(r=>Math.round(r.c)),z+8].map(f=>Math.max(0,Math.min(nf,f)));
+  const segs=[];for(let i=0;i<n;i++){const s0=bounds[i]*fr,s1=bounds[i+1]*fr;segs.push(pcm.slice(s0,s1))}
+  const ratios=segs.map((sg,i)=>sg.length/lens[i]).sort((x,y)=>x-y), med=ratios[Math.floor(n/2)];
+  if(segs.some((sg,i)=>{const r=sg.length/lens[i];return r<med/3||r>med*3}))return null;
+  return segs;
+}
+async function ttsRequest(text,voice){
   for(let k=0;k<TTS_MODELS.length;k++){
-    const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),25000);
+    const model=TTS_MODELS[k], ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),60000);
     let r;
-    try{r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+TTS_MODELS[0]+':generateContent',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-goog-api-key':LS.get('key','')},
+    try{r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-goog-api-key':LS.get('key','')},
       body:JSON.stringify({contents:[{parts:[{text}]}],generationConfig:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:voice}}}}})})}
-    catch(e){throw{code:'timeout'}}finally{clearTimeout(t)}
-    if(r.status===404&&TTS_MODELS.length>1){TTS_MODELS.shift();continue}
-    if(r.status===429){S.ttsDown=true;voiceNote();throw{code:'api_429'}}
+    catch(e){continue}finally{clearTimeout(t)}
+    if(r.status===404||r.status===429)continue;
     if(!r.ok)throw{code:'api_'+r.status};
     const j=await r.json(), d=(j.candidates?.[0]?.content?.parts||[]).find(p=>p.inlineData)?.inlineData;
-    if(!d)throw{code:'tts_empty'};
-    const mt=String(d.mimeType||''), bytes=b64Bytes(d.data);
-    const isRiff=bytes[0]===82&&bytes[1]===73&&bytes[2]===70&&bytes[3]===70;
-    if(isRiff||/mpeg|mp3|ogg/.test(mt))return new Blob([bytes],{type:isRiff?'audio/wav':mt.split(';')[0]});
-    const m=mt.match(/rate=(\d+)/);return pcmToWav(bytes,m?+m[1]:24000);
+    if(!d)continue;
+    return decodePCM(b64Bytes(d.data),d.mimeType);
   }
-  throw{code:'tts_model'};
+  LS.set('ttsDownDay',today());voiceNote();
+  throw{code:'tts_down'};
 }
-function ttsAudio(text,urgent){
-  const voice=LS.get('aiVoice','Sulafat'), key=voice+'|'+text;
-  if(ttsMem.has(key)){if(urgent)ttsPromote(key);return ttsMem.get(key)}
-  const p=(async()=>{
-    const hit=await idbGet(key); if(hit)return hit;
-    if(S.ttsDown)throw{code:'tts_down'};
-    await ttsSlot(key,urgent);
-    try{const b=await ttsFetch(text,voice);idbPut(key,b);return b}finally{ttsFree()}
-  })();
-  ttsMem.set(key,p); p.catch(()=>ttsMem.delete(key));
-  return p;
+const ttsPending=new Map();
+async function ttsBatch(list){
+  const voice=LS.get('aiVoice','Sulafat');
+  const todo=[],jobs=[];
+  for(const t of [...new Set(list.filter(Boolean).map(String))]){const pj=ttsPending.get(vkey(t));if(pj){jobs.push(pj);continue}if(await cachedVoice(t))continue;todo.push(t)}
+  const ng=Math.ceil(todo.length/10), size=ng?Math.ceil(todo.length/ng):1;
+  for(let i=0;i<todo.length;i+=size){
+    const group=todo.slice(i,i+size);
+    const job=(async()=>{
+      if(!ttsOn())return;
+      const {pcm,rate}=await ttsRequest(group.join('\n\n'),voice);
+      const segs=splitPCM(pcm,rate,group);
+      if(!segs){if(group.length>1){const h=Math.ceil(group.length/2);await Promise.all([ttsBatch(group.slice(0,h)),ttsBatch(group.slice(h))])}return}
+      group.forEach((t,j)=>{const b=wavBlob(segs[j],rate),k=voice+'|'+t;ttsMem.set(k,b);idbPut(k,b)});
+    })().catch(()=>{}).finally(()=>group.forEach(t=>ttsPending.delete(voice+'|'+t)));
+    group.forEach(t=>ttsPending.set(voice+'|'+t,job));jobs.push(job);
+  }
+  await Promise.all([...new Set(jobs)]);
 }
 let curUrl=null;
-async function playAI(text,rate){
-  const blob=await ttsAudio(text,true);
+async function playAI(text,rate,wait){
+  let blob=await cachedVoice(text);
+  if(!blob&&wait){const p=ttsPending.get(vkey(text));if(p){await Promise.race([p,new Promise(r=>setTimeout(r,wait))]);blob=await cachedVoice(text)}}
+  if(!blob)throw{code:'no_voice'};
   if(S.skip)return;
   return new Promise((res,rej)=>{
     if(curUrl)URL.revokeObjectURL(curUrl);
@@ -417,12 +459,12 @@ async function playAI(text,rate){
   });
 }
 function stopAudio(){try{S.playFin&&S.playFin()}catch(e){}try{player.pause()}catch(e){}}
-function prefetch(list){if(!ttsOn())return;for(const t of list)if(t)ttsAudio(t).catch(()=>{})}
-function prefetchLesson(L){if(!L)return;prefetch([L.intro_vi,...(L.sentences||[]),...(L.questions||[])]);prefetch(VI_FIXED)}
+function lessonTexts(L){return L?[L.intro_vi,...(L.sentences||[]),...(L.questions||[])]:[]}
+function prefetchLesson(L){if(!ttsOn())return Promise.resolve();return Promise.all([ttsBatch(lessonTexts(L)),ttsBatch([...VI_TEST,...VI_FIXED])])}
 function voiceNote(){
   const el=$('#viVoiceNote');if(!el)return;
-  if(ttsOn()){el.textContent='Đang dùng giọng AI của Gemini cho cả tiếng Việt và tiếng Anh. Lần đầu mỗi câu mất vài giây để tạo, sau đó được lưu lại trên máy.';return}
-  el.textContent=S.ttsDown?'Giọng AI tạm hết lượt miễn phí, Emma đang dùng giọng của máy. ':'';
+  if(ttsOn()){el.textContent='Đang dùng giọng AI của Gemini cho câu mẫu, câu hỏi và lời hướng dẫn cố định. Mỗi bài mới cần khoảng 10–20 giây để tạo giọng, sau đó được lưu trên máy. Lời nhận xét riêng từng lần dùng giọng của máy vì gói miễn phí giới hạn số lần tạo giọng mỗi ngày.';return}
+  el.textContent=(provider()==='gemini'&&LS.get('ttsMode','ai')==='ai'&&ttsDownToday())?'Hôm nay giọng AI đã hết lượt miễn phí, Emma tạm dùng giọng của máy. Ngày mai sẽ tự dùng lại giọng AI. ':'';
   if(!voices.some(v=>/^vi/i.test(v.lang)&&!isMale(v)))el.textContent+='Trình duyệt này chưa có giọng nữ tiếng Việt nên phần nhận xét có thể đọc sai dấu. Cách tốt nhất: dán key Gemini và chọn Giọng AI. Hoặc trên Android: Cài đặt › Quản lý chung › Chuyển văn bản thành giọng nói › Google › tải Tiếng Việt.';
 }
 
@@ -433,7 +475,7 @@ async function say(text,lang,mul){
   if(lang==='en') $('#caption').textContent=text; else $('#sub').textContent=text;
   const rate=lang==='vi'?0.95:S.rate*(mul||1);
   if(ttsOn()){
-    try{await playAI(text,lang==='vi'?1:Math.max(0.6,Math.min(1.3,S.rate*(mul||1)/0.9)));alive(tok);return}
+    try{await playAI(text,lang==='vi'?1:Math.max(0.6,Math.min(1.3,S.rate*(mul||1)/0.9)),S.voiceWait||0);alive(tok);return}
     catch(e){if(e==='cancel')throw e;alive(tok)}
   }
   for(const c of chunks(text)){alive(tok);if(S.skip)break;await speakOne(c,lang,rate)}
@@ -604,7 +646,16 @@ async function runLesson(mode){
       try{S.lesson=await getLesson(false)}catch(e){if(e==='cancel')throw e;S.lesson=Object.assign({},SAMPLE,{date:today()});$('#banner').hidden=false;$('#banner').textContent=errText(e)+' Tạm luyện bài mẫu.'}
       alive(tok); renderLesson(); prefetchLesson(S.lesson);
     }
-    const L=S.lesson; S.stats={scores:[],fixes:[]}; prefetchLesson(L);
+    const L=S.lesson; S.stats={scores:[],fixes:[]};
+    if(ttsOn()){
+      const need=[];for(const t of lessonTexts(L))if(!(await cachedVoice(t)))need.push(t);
+      alive(tok);
+      if(need.length){
+        setState('think','Đang chuẩn bị giọng đọc');$('#sub').textContent='Emma đang chuẩn bị giọng đọc cho bài này, chỉ mất vài giây lần đầu.';
+        await Promise.race([ttsBatch(need),new Promise(r=>setTimeout(r,35000))]);alive(tok);
+      }
+      ttsBatch([...VI_TEST,...VI_FIXED]);
+    }
     log([],true);
     // 1. Listen
     phase(0);
@@ -730,9 +781,9 @@ $('#saveSet').onclick=()=>{
   LS.set('profile',$('#profile').value.trim()||DEFAULT_PROFILE);aiStatus();
   $('#saveSet').textContent='Đã lưu';setTimeout(()=>$('#saveSet').textContent='Lưu',1500);
 };
-$('#testVoice').onclick=async()=>{unlockAudio();saveVoiceSet();const b=$('#testVoice');b.disabled=true;b.textContent='Đang tạo giọng...';
+$('#testVoice').onclick=async()=>{unlockAudio();saveVoiceSet();const b=$('#testVoice');b.disabled=true;b.textContent='Đang tạo giọng...';S.voiceWait=40000;ttsBatch(VI_TEST);
   try{await say('Chào anh, em là Emma. Hôm nay mình cùng luyện nói nhé.','vi');await say('Hello, I am Emma. Let us practice together.','en')}catch(e){}
-  b.disabled=false;b.textContent='Thử giọng';setState('idle')};
+  S.voiceWait=0;b.disabled=false;b.textContent='Thử giọng';setState('idle')};
 function saveVoiceSet(){LS.set('voice',$('#voice').value);LS.set('viVoice',$('#viVoice').value);LS.set('ttsMode',$('#ttsMode').value);LS.set('aiVoice',$('#aiVoice').value);$('#aiVoiceWrap').hidden=$('#ttsMode').value!=='ai';voiceNote()}
 $('#ttsMode').onchange=saveVoiceSet;$('#aiVoice').onchange=saveVoiceSet;
 $('#newLesson').onclick=async()=>{
@@ -750,7 +801,7 @@ const cached=LS.get('lesson',null);
 S.lesson=cached&&cached.date===today()?cached:null;
 $('#ttsMode').value=LS.get('ttsMode','ai');$('#aiVoice').value=LS.get('aiVoice','Sulafat');$('#aiVoiceWrap').hidden=$('#ttsMode').value!=='ai';voiceNote();
 renderLesson();
-setTimeout(()=>prefetchLesson(S.lesson||LS.get('lesson',null)),1500);
+setTimeout(()=>{if(ttsOn())ttsBatch([...VI_TEST,...VI_FIXED])},1500);
 })();
 </script>
 <script>if('serviceWorker' in navigator&&location.protocol==='https:'){navigator.serviceWorker.register('sw.js').catch(()=>{})}</script></body></html>
